@@ -169,6 +169,8 @@ async function createPgliteSql(): Promise<Sql> {
 
 let sqlPromise: Promise<Sql> | null = null;
 
+const onVercel = typeof process !== "undefined" && Boolean(process.env.VERCEL);
+
 async function createSql(): Promise<Sql> {
   if (typeof window !== "undefined") {
     throw new Error(
@@ -176,7 +178,15 @@ async function createSql(): Promise<Sql> {
         "or a server route loader, never from client code.",
     );
   }
-  return dbSource === "neon" ? createNeonSql() : createPgliteSql();
+  if (dbSource === "neon") return createNeonSql();
+  // Vercel serverless does not ship PGLite's wasm (pglite.data / pglite.wasm).
+  // Instantiating it rejects after SSR and kills the function. Require Neon.
+  if (onVercel) {
+    throw new Error(
+      "DATABASE_URL is required on Vercel. Add a Neon pooled Postgres URL in project env.",
+    );
+  }
+  return createPgliteSql();
 }
 
 /**
@@ -200,6 +210,9 @@ export function getSql(): Promise<Sql> {
  * Kysely dialect). Throws when `DATABASE_URL` is set (that path uses Neon).
  */
 export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite> {
+  if (onVercel && dbSource !== "neon") {
+    throw new Error("PGLite is not available on Vercel — set DATABASE_URL (Neon).");
+  }
   if (dbSource !== "pglite") {
     throw new Error("getPglite() is only available on the PGLite fallback (no DATABASE_URL)");
   }
@@ -221,7 +234,14 @@ export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite
  */
 export function ensureDbReady(): Promise<void> {
   if (dbSource !== "pglite") return Promise.resolve();
-  return getSql().then(() => undefined);
+  if (onVercel) return Promise.resolve();
+  // Never reject — auth/server.ts calls `void ensureDbReady()` at import time,
+  // and an uncaught rejection kills the Vercel function after SSR.
+  return getSql()
+    .then(() => undefined)
+    .catch((err) => {
+      console.error("[db] PGLite bootstrap failed:", err);
+    });
 }
 
 // Server-only eager start: kick PGLite bootstrap as soon as this module loads in
@@ -229,9 +249,6 @@ export function ensureDbReady(): Promise<void> {
 const globalBoot = globalThis as typeof globalThis & {
   __pgBootstrapPromise__?: Promise<void>;
 };
-if (typeof window === "undefined" && dbSource === "pglite") {
-  globalBoot.__pgBootstrapPromise__ ??= ensureDbReady().catch((err) => {
-    globalBoot.__pgBootstrapPromise__ = undefined;
-    console.error("[db] PGLite bootstrap failed:", err);
-  });
+if (typeof window === "undefined" && dbSource === "pglite" && !onVercel) {
+  globalBoot.__pgBootstrapPromise__ ??= ensureDbReady();
 }
