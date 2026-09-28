@@ -35,3 +35,14 @@ Copy `.env.example` into your environment. Voice and scoring need `XAI_API_KEY`.
 4. Redeploy
 
 Without `XAI_API_KEY`, the interview can still be typed. Without `DATABASE_URL`, applications stay on the device that ran them.
+
+## Scripts
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run typecheck
+npm test
+npm run lint
+```
